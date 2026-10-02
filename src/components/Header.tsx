@@ -12,7 +12,7 @@ type HeaderProps = {
 
 export default function Header({ onNavigate, currentView, onAdminClick }: HeaderProps) {
   const { totalItems, setIsCartOpen } = useCart();
-  const { session } = useAuth();
+  const { isAdmin } = useAuth();
 
   const navItems = [
     { label: 'Home', view: 'home' as const },
@@ -56,7 +56,7 @@ export default function Header({ onNavigate, currentView, onAdminClick }: Header
           </nav>
 
           <div className="flex items-center gap-3">
-            {session && (
+            {isAdmin && (
               <button
                 onClick={onAdminClick}
                 className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-50 rounded-lg transition-colors"
