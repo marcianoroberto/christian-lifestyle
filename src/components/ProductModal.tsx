@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import type { Product } from '@/lib/supabase';
-import { getProductBadges, supabase } from '@/lib/supabase';
+import { useEffect, useMemo, useState } from 'react';
+import type { Product, ProductVariant } from '@/lib/supabase';
+import { formatVariantOptions, getProductBadges, supabase } from '@/lib/supabase';
 import { formatPrice } from '@/lib/format';
 import { useCart } from '@/context/CartContext';
 import { X, ShoppingCart, Heart, Truck, Shield, RefreshCw } from 'lucide-react';
@@ -12,6 +12,8 @@ type ProductModalProps = {
 
 export default function ProductModal({ productId, onClose }: ProductModalProps) {
   const [product, setProduct] = useState<Product | null>(null);
+  const [variants, setVariants] = useState<ProductVariant[]>([]);
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isFavorite, setIsFavorite] = useState(false);
   const [quantity, setQuantity] = useState(1);
@@ -20,34 +22,64 @@ export default function ProductModal({ productId, onClose }: ProductModalProps) 
   useEffect(() => {
     if (!productId) {
       setProduct(null);
+      setVariants([]);
+      setSelectedVariantId(null);
       setLoading(true);
       return;
     }
 
-    setLoading(true);
-    setQuantity(1);
-    supabase
-      .from('products')
-      .select('*')
-      .eq('id', productId)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) console.error('Error fetching product:', error);
-        setProduct(data as Product | null);
-        setLoading(false);
-      });
+    let cancelled = false;
+
+    async function fetchProductAndVariants() {
+      setLoading(true);
+      setQuantity(1);
+
+      const [{ data: productData, error: productError }, { data: variantData, error: variantError }] = await Promise.all([
+        supabase.from('products').select('*').eq('id', productId).maybeSingle(),
+        supabase
+          .from('product_variants')
+          .select('*')
+          .eq('product_id', productId)
+          .eq('is_active', true)
+          .order('sort_order', { ascending: true }),
+      ]);
+
+      if (cancelled) return;
+
+      if (productError) console.error('Error fetching product:', productError);
+      if (variantError) console.error('Error fetching product variants:', variantError);
+
+      const nextProduct = productData as Product | null;
+      const nextVariants = (variantData ?? []) as ProductVariant[];
+      const firstAvailable = nextVariants.find((variant) => variant.is_available) ?? nextVariants[0] ?? null;
+
+      setProduct(nextProduct);
+      setVariants(nextVariants);
+      setSelectedVariantId(firstAvailable?.id ?? null);
+      setLoading(false);
+    }
+
+    void fetchProductAndVariants();
+    return () => {
+      cancelled = true;
+    };
   }, [productId]);
+
+  const selectedVariant = useMemo(
+    () => variants.find((variant) => variant.id === selectedVariantId) ?? null,
+    [variants, selectedVariantId]
+  );
 
   if (!productId) return null;
 
   const badges = getProductBadges(product?.badges ?? null);
+  const displayPrice = selectedVariant?.price ?? product?.price ?? 0;
+  const comparePrice = selectedVariant?.compare_at_price ?? product?.compare_at_price ?? null;
+  const variantLabel = selectedVariant ? formatVariantOptions(selectedVariant) : '';
 
   return (
     <>
-      <div
-        className="fixed inset-0 bg-black/50 z-50 transition-opacity duration-300 opacity-100"
-        onClick={onClose}
-      />
+      <div className="fixed inset-0 bg-black/50 z-50 transition-opacity duration-300 opacity-100" onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
         <div
           className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] overflow-y-auto pointer-events-auto transition-all duration-300 scale-100 opacity-100"
@@ -72,7 +104,11 @@ export default function ProductModal({ productId, onClose }: ProductModalProps) 
 
               <div className="grid md:grid-cols-2 gap-0">
                 <div className="aspect-square md:aspect-auto bg-stone-100">
-                  <img src={product.image_url} alt={product.name} className="w-full h-full object-cover" />
+                  <img
+                    src={selectedVariant?.image_url || product.image_url}
+                    alt={product.name}
+                    className="w-full h-full object-cover"
+                  />
                 </div>
 
                 <div className="p-6 sm:p-8 flex flex-col">
@@ -93,9 +129,9 @@ export default function ProductModal({ productId, onClose }: ProductModalProps) 
                   <h2 className="text-2xl font-bold text-stone-800 leading-tight">{product.name}</h2>
 
                   <div className="flex items-baseline gap-3 mt-3">
-                    <p className="text-2xl font-bold text-amber-800">{formatPrice(product.price)}</p>
-                    {product.compare_at_price && product.compare_at_price > product.price && (
-                      <p className="text-base text-stone-400 line-through">{formatPrice(product.compare_at_price)}</p>
+                    <p className="text-2xl font-bold text-amber-800">{formatPrice(displayPrice)}</p>
+                    {comparePrice && comparePrice > displayPrice && (
+                      <p className="text-base text-stone-400 line-through">{formatPrice(comparePrice)}</p>
                     )}
                   </div>
 
@@ -110,6 +146,37 @@ export default function ProductModal({ productId, onClose }: ProductModalProps) 
                   )}
 
                   <p className="text-stone-600 mt-4 leading-relaxed text-sm">{product.description}</p>
+
+                  {variants.length > 1 && (
+                    <div className="mt-6">
+                      <p className="text-sm font-semibold text-stone-700 mb-2">Kies een variant</p>
+                      <div className="flex flex-wrap gap-2">
+                        {variants.map((variant) => (
+                          <button
+                            key={variant.id}
+                            type="button"
+                            disabled={!variant.is_available}
+                            onClick={() => setSelectedVariantId(variant.id)}
+                            className={`px-3 py-2 rounded-xl border text-sm transition-colors ${
+                              selectedVariantId === variant.id
+                                ? 'border-amber-800 bg-amber-50 text-amber-900'
+                                : 'border-stone-200 text-stone-700 hover:border-stone-400'
+                            } ${!variant.is_available ? 'opacity-40 cursor-not-allowed line-through' : ''}`}
+                          >
+                            {formatVariantOptions(variant) || variant.title}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {variants.length === 1 && variantLabel && (
+                    <p className="text-sm text-stone-500 mt-4">{variantLabel}</p>
+                  )}
+
+                  {selectedVariant && !selectedVariant.is_available && (
+                    <p className="mt-4 text-sm font-medium text-red-600">Deze variant is momenteel niet beschikbaar.</p>
+                  )}
 
                   <div className="flex items-center gap-4 mt-6">
                     <div className="flex items-center border border-stone-200 rounded-full">
@@ -127,11 +194,13 @@ export default function ProductModal({ productId, onClose }: ProductModalProps) 
                   </div>
 
                   <button
+                    disabled={!selectedVariant || !selectedVariant.is_available}
                     onClick={() => {
-                      addToCart(product, quantity);
+                      if (!selectedVariant) return;
+                      addToCart(product, selectedVariant, quantity);
                       onClose();
                     }}
-                    className="mt-6 w-full py-3.5 bg-amber-800 text-white font-semibold rounded-full hover:bg-amber-900 transition-colors flex items-center justify-center gap-2 active:scale-[0.98]"
+                    className="mt-6 w-full py-3.5 bg-amber-800 text-white font-semibold rounded-full hover:bg-amber-900 transition-colors flex items-center justify-center gap-2 active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <ShoppingCart className="w-5 h-5" />
                     Toevoegen aan winkelmandje
