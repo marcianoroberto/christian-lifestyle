@@ -1,38 +1,104 @@
-# Christian Lifestyle — pre-Stripe audit
+# Christian Lifestyle — pre-Stripe foundation
 
-This branch contains the first foundation fixes before a Stripe integration is added.
+This branch contains the security and commerce foundation that should exist before Stripe is added.
 
-## Critical findings
+## Implemented
 
-1. **Admin authorization was too broad.**
-   Any authenticated Supabase user could write to `products` and `site_settings`. Because the UI also offered public sign-up, a visitor could potentially create an account and modify the catalog.
+### 1. Product + variant model
 
-2. **Client prices cannot be trusted at checkout.**
-   The cart stores full product objects and prices in `localStorage`. That is acceptable for display, but Stripe checkout must be created server-side from product/variant IDs and quantities. The server must re-read authoritative prices from the database.
+`products` remains the public product-level catalog row. `product_variants` is now the canonical sellable unit.
 
-3. **Product variants are not modelled yet.**
-   Products such as rings, necklaces and Bible covers need color/size selections. A variant-aware cart and inventory model must be implemented before checkout.
+A variant contains:
+- product reference
+- optional SKU
+- customer-facing variant title
+- structured option values (`jsonb`), e.g. `{ "Kleur": "Zilver", "Maat": "12" }`
+- retail price and compare-at price
+- optional variant image
+- active/available state
+- sort order
 
-4. **`badges` schema/type mismatch.**
-   The migration creates `badges` as `text`, while TypeScript expected `string[]`. UI code calling `.map()` can fail at runtime. This branch makes the frontend tolerant; the database should later be normalized to an array/JSON representation.
+Existing products automatically receive a default variant. Known launch products with size/color choices are seeded with explicit variants.
 
-5. **Inventory is only a boolean.**
-   `in_stock` is insufficient for own stock, supplier stock, made-to-order and dropship products. Inventory needs a proper model before automated checkout/fulfilment.
+Newly created products automatically receive a default variant so old admin flows keep working until variant management is added to the admin UI.
 
-6. **Commercial/legal claims are currently hard-coded.**
-   Shipping thresholds, payment methods and return promises are shown even though payment/fulfilment is not live yet. These must be confirmed and centralized before launch.
+### 2. Inventory + fulfilment model
 
-7. **Supplier/internal metadata must not become public catalog data.**
-   Supplier URLs, wholesale references/costs and internal fulfilment notes should be stored in an admin-only table, not in a publicly selectable `products` row.
+`variant_inventory` stores internal stock state per variant. Supported modes:
+- `own_stock`
+- `supplier_stock`
+- `made_to_order`
+- `limited_supplier`
+- `untracked`
 
-8. **Product pages currently use a modal rather than stable URLs.**
-   This is acceptable for prototyping, but proper product routes are preferable before launch for SEO, sharing and analytics.
+It stores own-stock quantities, reserved quantities, optional supplier quantities, supplier availability, backorder behaviour and low-stock thresholds.
 
-## Admin bootstrap after security migration
+The public `product_variants.is_available` flag is derived from this private inventory state. Customers therefore see availability without seeing internal stock details.
 
-The migration `20261003002000_secure_admin_access.sql` deliberately does not make every existing user an admin.
+`inventory_movements` provides an internal ledger for future reservations, sales, returns, supplier syncs and manual adjustments.
 
-After the migration is applied, run this once in the Supabase SQL editor with the intended admin email:
+### 3. Suppliers separated from the public catalog
+
+Supplier information is stored in admin-only tables:
+- `suppliers`
+- `supplier_variants`
+
+This includes supplier SKU, supplier URL, fulfilment mode, cost price, production/assembly country, origin-verification status, lead time and internal notes.
+
+Anonymous users have no RLS policy that exposes these tables.
+
+Initial mappings are seeded for 3:16 Europe, Bron van Hout, Grace & Praise and Christelijke Sieraden.
+
+### 4. Variant-aware cart
+
+The browser cart now identifies cart lines by `variant.id`, not by `product.id`.
+
+That means different colors/sizes of the same product remain separate lines. The product modal loads active variants, requires an explicit choice when needed and prevents unavailable variants from being added.
+
+The old cart localStorage key was replaced with a v2 key so incompatible pre-variant cart data is not reused.
+
+Important: browser prices are display-only. They remain untrusted for payment.
+
+### 5. Orders and order lines
+
+`orders` and `order_items` are now present for the future server-side checkout/webhook flow.
+
+Orders track:
+- order/payment/fulfilment status
+- customer + address snapshots
+- subtotal/shipping/discount/tax/total
+- payment-provider identifiers
+- paid/fulfilled timestamps
+
+Order items snapshot:
+- product and variant identifiers
+- product/variant names at purchase time
+- SKU and option values
+- supplier/fulfilment information
+- quantity
+- authoritative unit price
+- generated line total
+
+Anonymous users cannot read or write order data.
+
+## Security foundation
+
+### Admin authorization
+
+The original implementation allowed every authenticated Supabase user to write products and site settings. The app also exposed public account creation.
+
+This branch:
+- removes public admin sign-up from the frontend;
+- introduces `admin_users` as an explicit allow-list;
+- adds `public.is_admin()`;
+- changes product/site-settings write policies to require that allow-list;
+- reuses the same admin rule for variants, inventory, suppliers and orders.
+
+### Admin bootstrap after migration
+
+The migration deliberately does not automatically promote an existing Supabase user.
+
+After migrations are applied, run this once in the Supabase SQL editor with the intended admin email:
 
 ```sql
 insert into public.admin_users (user_id)
@@ -44,50 +110,35 @@ on conflict (user_id) do nothing;
 
 Do not put this operation in browser code.
 
-## Required Stripe architecture
+## Required Stripe architecture — next phase
 
-Use this flow:
+Stripe should use this flow:
 
-1. Browser sends only product/variant IDs and quantities to a server-side checkout endpoint.
-2. Server re-reads products/variants and authoritative prices from the database.
-3. Server validates saleability/stock and creates the Stripe Checkout Session.
-4. Stripe webhook verifies payment server-side.
-5. Only the verified webhook creates/finalizes the paid order and adjusts/reserves inventory.
-6. Fulfilment/dropship state is handled after payment confirmation.
+1. Browser sends only variant IDs and quantities.
+2. Server loads those variants from Supabase.
+3. Server validates `is_active`, `is_available` and authoritative prices.
+4. Server rechecks private inventory/fulfilment rules where applicable.
+5. Server creates an order in `pending_payment` state and immutable `order_items` snapshots.
+6. Server creates the Stripe Checkout Session using database prices, never browser totals.
+7. Stripe webhook verifies successful payment server-side.
+8. Webhook marks the order paid and performs inventory reservation/sale movements.
+9. Fulfilment is routed using the internal supplier/fulfilment mapping.
 
-Never send a Stripe secret key to the browser and never accept a cart total supplied by the browser as authoritative.
+Never expose a Stripe secret in Vite/client code.
 
-## Recommended next data model
+## Remaining before Stripe
 
-Keep public catalog and internal supplier data separate.
-
-### Public
-- products
-- product_variants
-- public availability
-- retail prices
-- customer-facing descriptions/images
-
-### Admin only
-- product_supplier_data
-- supplier SKU and supplier URL
-- purchase cost
-- fulfilment method
-- stock sync configuration
-- internal notes
-
-### Commerce
-- orders
-- order_items (immutable price/name snapshots)
-- payments / Stripe identifiers
-- fulfilment status
-- inventory movements or reservations
+The backend foundation for steps 1–5 exists. Useful follow-up work before/alongside Stripe:
+- add admin UI for editing variants, inventory and supplier mappings;
+- decide exact shipping rules and where shipping cost is calculated;
+- add stable product URLs before launch;
+- replace remaining placeholder/commercial copy with confirmed policies;
+- confirm supplier photo licensing and final retail prices.
 
 ## Before live launch
 
-- Replace/remove unverified claims such as shipping thresholds and payment methods.
 - Add privacy policy, terms, returns/cancellation information and required company/contact details.
 - Use a business contact channel rather than a minor's personal email address.
 - Confirm image/licensing permission for supplier product photos.
 - Add stable product URLs and metadata.
-- Test mobile cart/checkout and accessibility.
+- Test mobile cart/checkout, keyboard navigation and accessibility.
