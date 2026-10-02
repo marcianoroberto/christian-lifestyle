@@ -33,7 +33,7 @@ const genders = [
 ];
 
 function AppContent() {
-  const { session, loading } = useAuth();
+  const { session, isAdmin, loading } = useAuth();
   const [view, setView] = useState<View>('home');
   const [category, setCategory] = useState('all');
   const [gender, setGender] = useState('all');
@@ -41,31 +41,42 @@ function AppContent() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
 
-  // Check URL hash for #admin on load
   useEffect(() => {
     const checkHash = () => {
-      if (window.location.hash === '#admin') {
-        if (session) {
-          setShowAdmin(true);
-        } else {
-          setShowLogin(true);
-        }
+      if (window.location.hash !== '#admin') return;
+
+      if (session && isAdmin) {
+        setShowAdmin(true);
+        setShowLogin(false);
+      } else {
+        setShowAdmin(false);
+        setShowLogin(true);
       }
     };
+
     checkHash();
     window.addEventListener('hashchange', checkHash);
     return () => window.removeEventListener('hashchange', checkHash);
-  }, [session]);
+  }, [session, isAdmin]);
 
   const handleNavigate = (newView: View) => {
     setView(newView);
     setShowAdmin(false);
     setShowLogin(false);
+    if (window.location.hash === '#admin') {
+      history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleAdminClick = () => {
-    setShowAdmin(true);
+    if (session && isAdmin) {
+      setShowAdmin(true);
+      setShowLogin(false);
+      return;
+    }
+
+    setShowLogin(true);
   };
 
   const handleLoginSuccess = () => {
@@ -87,21 +98,15 @@ function AppContent() {
 
   if (showLogin) {
     return (
-      <AuthProvider>
-        <LoginPage
-          onSuccess={handleLoginSuccess}
-          onBack={() => setShowLogin(false)}
-        />
-      </AuthProvider>
+      <LoginPage
+        onSuccess={handleLoginSuccess}
+        onBack={() => setShowLogin(false)}
+      />
     );
   }
 
-  if (showAdmin && session) {
-    return (
-      <AuthProvider>
-        <AdminPage onExit={() => setShowAdmin(false)} />
-      </AuthProvider>
-    );
+  if (showAdmin && session && isAdmin) {
+    return <AdminPage onExit={() => setShowAdmin(false)} />;
   }
 
   return (
@@ -122,13 +127,9 @@ function AppContent() {
               <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
                 <div className="flex items-center gap-2 mb-2">
                   <Sparkles className="w-5 h-5 text-amber-700" />
-                  <span className="text-sm font-medium text-amber-800">
-                    Uitgelicht
-                  </span>
+                  <span className="text-sm font-medium text-amber-800">Uitgelicht</span>
                 </div>
-                <h2 className="text-2xl sm:text-3xl font-bold text-stone-800 mb-8">
-                  Onze favorieten
-                </h2>
+                <h2 className="text-2xl sm:text-3xl font-bold text-stone-800 mb-8">Onze favorieten</h2>
                 <ProductGrid showFeatured onProductClick={handleProductClick} />
                 <div className="text-center mt-10">
                   <button
@@ -145,11 +146,9 @@ function AppContent() {
           {view === 'shop' && (
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
               <div className="text-center mb-10">
-                <h1 className="text-3xl sm:text-4xl font-bold text-stone-800">
-                  Onze collectie
-                </h1>
+                <h1 className="text-3xl sm:text-4xl font-bold text-stone-800">Onze collectie</h1>
                 <p className="mt-3 text-stone-600 max-w-xl mx-auto">
-                  Ontdek christelijke shirts, sieraden en accessoires — allemaal met liefde gemaakt.
+                  Ontdek christelijke sieraden, woonaccessoires en cadeaus met betekenis.
                 </p>
               </div>
 
@@ -193,7 +192,6 @@ function AppContent() {
         </main>
 
         <Footer />
-
         <CartDrawer />
         <ProductModal
           productId={selectedProductId}
