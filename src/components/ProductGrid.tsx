@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase, type Product, getProductBadges } from '@/lib/supabase';
 import { formatPrice } from '@/lib/format';
-import { useCart } from '@/context/CartContext';
 import { ShoppingCart, Heart } from 'lucide-react';
 
 type ProductGridProps = {
@@ -15,7 +14,6 @@ export default function ProductGrid({ category, gender, showFeatured, onProductC
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
-  const { addToCart } = useCart();
 
   useEffect(() => {
     async function fetchProducts() {
@@ -93,9 +91,12 @@ export default function ProductGrid({ category, gender, showFeatured, onProductC
                   {product.compare_at_price && product.compare_at_price > product.price && <span className="text-xs text-stone-400 line-through">{formatPrice(product.compare_at_price)}</span>}
                 </div>
                 <button
-                  onClick={(e) => { e.stopPropagation(); addToCart(product); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onProductClick?.(product);
+                  }}
                   className="w-9 h-9 bg-stone-800 hover:bg-amber-800 text-white rounded-full flex items-center justify-center transition-all hover:scale-110 active:scale-95"
-                  aria-label="Toevoegen aan winkelmandje"
+                  aria-label="Product bekijken en variant kiezen"
                 >
                   <ShoppingCart className="w-4 h-4" />
                 </button>
